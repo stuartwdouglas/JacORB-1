@@ -465,11 +465,15 @@ public class CDRInputStream
 
         if (this.chunk_end_pos >= pos && this.chunk_end_pos <= aligned_pos)
         {
-            this.adjust_positions();
+            this.adjust_positions(false);
         }
     }
 
-    private final void adjust_positions()
+    /**
+     *
+     * @param valueEnd If this is true then this adjustment is being done at the end of a value.
+     */
+    private final void adjust_positions(boolean valueEnd)
     {
         this.chunk_end_pos = -1;
         int saved_pos = this.pos;
@@ -478,32 +482,30 @@ public class CDRInputStream
 
         if (tag < 0)
         {
-                // tag is an end tag
+            // tag is an end tag
             if (-tag > this.valueNestingLevel)
-                {
-                    throw new INTERNAL
-                    (
-                        "received end tag " + tag +
-                        " with value nesting level " +
-                    this.valueNestingLevel
-                    );
-                }
+            {
+                throw new INTERNAL
+                        (
+                                "received end tag " + tag +
+                                        " with value nesting level " +
+                                        this.valueNestingLevel
+                        );
+            }
             this.valueNestingLevel = -tag;
             this.valueNestingLevel--;
-  	    if (this.valueNestingLevel > 0)
-                {
+            if (this.valueNestingLevel > 0 && !valueEnd)
+            {
                 this.chunk_end_pos = pos;
                 this.handle_chunking();
-                }
             }
-            else if (tag > 0 && tag < 0x7fffff00)
-            {
-                // tag is the chunk size tag of another chunk
+        } else if (tag > 0 && tag < 0x7fffff00)
+        {
+            // tag is the chunk size tag of another chunk
             this.chunk_end_pos = this.pos + tag;
-            }
-            else // (tag == 0 || tag >= 0x7fffff00)
-            {
-                // tag is the null value tag or the value tag of a nested value
+        } else // (tag == 0 || tag >= 0x7fffff00)
+        {
+            // tag is the null value tag or the value tag of a nested value
             this.pos = saved_pos;      // "unread" the tag
             this.index = saved_index;
         }
@@ -715,7 +717,7 @@ public class CDRInputStream
         // handle_chunking();
         if (this.chunk_end_pos == this.pos)
         {
-            this.adjust_positions();
+            this.adjust_positions(false);
         }
         index++;
         byte value = buffer[pos++];
@@ -2624,22 +2626,24 @@ public class CDRInputStream
         }
 
         String codebase = ((tag & 1) != 0) ? read_codebase() : null;
-        chunkedValue = ((tag & 8) != 0);
-
+        final boolean thisChunked = (tag & 8) != 0;
+        final int level = valueNestingLevel;
+        chunkedValue = thisChunked;
         int theTag = tag;
         tag = tag & 0xfffffff6;
 
+        Serializable result;
         if (tag == 0x7fffff00)
         {
             throw new MARSHAL ("missing value type information");
         }
         else if (tag == 0x7fffff02)
         {
-            return read_typed_value(start_offset, codebase);
+            result =  read_typed_value(start_offset, codebase);
         }
         else if (tag == 0x7fffff06)
         {
-            return read_multi_typed_value( start_offset, codebase );
+            result =  read_multi_typed_value( start_offset, codebase );
         }
         else
         {
@@ -2647,6 +2651,7 @@ public class CDRInputStream
                               Integer.toHexString(theTag) + " (offset=0x" +
                               Integer.toHexString(start_offset) + ")");
         }
+        return result;
     }
 
     /**
@@ -2670,22 +2675,24 @@ public class CDRInputStream
         }
 
         final String codebase = ((tag & 1) != 0) ? read_codebase() : null;
-        chunkedValue = ((tag & 8) != 0);
+        final boolean thisChunked = (tag & 8) != 0;
+        final int level = valueNestingLevel;
+        chunkedValue = thisChunked;
 
         int theTag = tag;
         tag = tag & 0xfffffff6;
-
+        Serializable result;
         if (tag == 0x7fffff00)
         {
-            return read_untyped_value ( new String[]{ rep_id }, start_offset, codebase);
+            result =  read_untyped_value ( new String[]{ rep_id }, start_offset, codebase);
         }
         else if (tag == 0x7fffff02)
         {
-            return read_typed_value( start_offset, codebase );
+            result =  read_typed_value( start_offset, codebase );
         }
         else if (tag == 0x7fffff06)
         {
-            return read_multi_typed_value( start_offset, codebase );
+            result =  read_multi_typed_value( start_offset, codebase );
         }
         else
         {
@@ -2693,6 +2700,11 @@ public class CDRInputStream
                               Integer.toHexString(theTag) + " (offset=0x" +
                               Integer.toHexString(start_offset) + ")");
         }
+        if (thisChunked && valueNestingLevel != level && sunInteropFix)
+        {
+             adjust_positions(true);
+        }
+        return result;
     }
 
     /**
@@ -2751,23 +2763,26 @@ public class CDRInputStream
         }
 
         String codebase = ((tag & 1) != 0) ? read_codebase() : null;
-        chunkedValue = ((tag & 8) != 0);
+        final boolean thisChunked = (tag & 8) != 0;
+        final int level = valueNestingLevel;
+        chunkedValue = thisChunked;
 
         int theTag = tag;
         tag = tag & 0xfffffff6;
 
+        java.io.Serializable result = null;
         if (tag == 0x7fffff00)
         {
-            return read_untyped_value (new String[]{ValueHandler.getRMIRepositoryID(clz)},
+            result = read_untyped_value (new String[]{ValueHandler.getRMIRepositoryID(clz)},
                                                     start_offset, codebase);
         }
         else if (tag == 0x7fffff02)
         {
-            return read_typed_value(start_offset, codebase);
+            result =  read_typed_value(start_offset, codebase);
         }
         else if (tag == 0x7fffff06)
         {
-            return read_multi_typed_value(start_offset, codebase);
+            result = read_multi_typed_value(start_offset, codebase);
         }
         else
         {
@@ -2777,6 +2792,11 @@ public class CDRInputStream
                               Integer.toHexString(start_offset) +
                               ")");
         }
+        if (thisChunked && valueNestingLevel != level && sunInteropFix)
+        {
+            adjust_positions(true);
+        }
+        return result;
     }
 
     /**
@@ -2801,32 +2821,33 @@ public class CDRInputStream
         }
 
         String codebase = ((tag & 1) != 0) ? read_codebase() : null;
-        chunkedValue = ((tag & 8) != 0);
+        final boolean thisChunked = (tag & 8) != 0;
+        final int level = valueNestingLevel;
+        chunkedValue = thisChunked;
+
 
         int theTag = tag;
         tag = tag & 0xfffffff6;
-
+        java.io.Serializable result = null;
         if (tag == 0x7fffff00)
         {
-            java.io.Serializable result = factory.read_value (this);
+            result = factory.read_value(this);
 
             if( result != null )
             {
                 getValueMap().put(ObjectUtil.newInteger(start_offset), result);
             }
 
-            return result;
         }
         else if (tag == 0x7fffff02)
         {
-            final Serializable result = read_typed_value(start_offset, codebase, factory);
+            result = read_typed_value(start_offset, codebase, factory);
 
             if (result != null)
             {
                 getValueMap().put(ObjectUtil.newInteger(start_offset), result);
             }
 
-            return result;
         }
         else
         {
@@ -2834,6 +2855,11 @@ public class CDRInputStream
                               Integer.toHexString(theTag) + " (offset=0x" +
                               Integer.toHexString(start_offset) + ")");
         }
+        if (thisChunked && valueNestingLevel != level && sunInteropFix)
+        {
+            adjust_positions(true);
+        }
+        return result;
     }
 
     /**
@@ -3073,7 +3099,7 @@ public class CDRInputStream
             pos = savedPos;
             index = savedIndex;
 
-            adjust_positions();
+            adjust_positions(false);
         }
     }
 
@@ -3125,7 +3151,7 @@ public class CDRInputStream
             ids[i] = read_repository_id();
         }
 
-        return read_untyped_value (ids, index, codebase);
+        return read_untyped_value(ids, index, codebase);
     }
 
 
